@@ -7,7 +7,7 @@ An end-to-end data science project analysing customer purchasing behaviour using
 ```
 ✓  Week 1 — Data pipeline, EDA, MLflow setup
 ✓  Week 2 — RFM scoring, K-Means clustering, segment profiling
-☐  Week 3 — Cohort retention analysis, churn prediction model
+✓  Week 3 — Cohort retention analysis, churn prediction model
 ☐  Week 4 — Streamlit dashboard, model serving
 ☐  Week 5 — Monitoring, drift detection, retraining pipeline
 ```
@@ -40,19 +40,30 @@ customer_segmentation/
 │   ├── rfm_segments.csv      # customers + cluster labels (Week 2)
 │   ├── rfm_full.csv          # full dataset incl. outliers, scaled-ready
 │   ├── vip_outliers.csv      # bulk B2B accounts separated pre-clustering
-│   ├── scaler.joblib         # fitted StandardScaler
-│   └── kmeans_model.joblib   # final K-Means model
+│   ├── scaler.joblib         # fitted StandardScaler (RFM)
+│   ├── kmeans_model.joblib   # final K-Means model
+│   ├── cohort_retention.csv  # monthly retention % matrix (Week 3)
+│   ├── cohort_counts.csv     # raw cohort counts matrix (Week 3)
+│   ├── cohort_summary.csv    # key retention metrics (Week 3)
+│   ├── churn_labels.csv      # all customers + churn label + predictions (Week 3)
+│   ├── churn_model.joblib    # trained XGBoost churn model (Week 3)
+│   └── churn_scaler.joblib   # fitted StandardScaler (churn features)
 ├── notebooks/
-│   ├── 01_eda.ipynb          # exploratory data analysis
-│   └── 02_rfm_clustering.ipynb  # RFM + cluster visualisation
+│   ├── 01_eda.ipynb              # exploratory data analysis
+│   ├── 02_rfm_clustering.ipynb   # RFM + cluster visualisation
+│   └── 03_cohort_churn.ipynb     # cohort retention + churn model evaluation
 ├── src/
 │   ├── ingest.py              # data loading & cleaning pipeline
 │   ├── features.py            # RFM scoring & CLV computation
-│   └── train.py                # K-Means clustering + MLflow tracking
+│   ├── train.py                # K-Means clustering + MLflow tracking
+│   ├── cohorts.py              # cohort retention matrix
+│   └── churn_model.py          # churn feature engineering + XGBoost + SHAP
 ├── reports/                   # saved plots and charts
 ├── requirements.txt
 ├── .gitignore
-└── README.md
+├── README.md
+├── PROJECT_LOG.md
+└── DESIGN_DOC.md
 ```
 
 ## Setup
@@ -84,13 +95,19 @@ python src/features.py
 # Week 2 — run K-Means clustering with MLflow tracking
 python src/train.py
 
+# Week 3 — cohort retention analysis
+python src/cohorts.py
+
+# Week 3 — churn prediction model (XGBoost + SHAP)
+python src/churn_model.py
+
 # View experiment tracking
 mlflow ui --backend-store-uri sqlite:///mlflow.db
 # then open http://127.0.0.1:5000
 
 # Explore results visually
 jupyter lab
-# open notebooks/01_eda.ipynb and notebooks/02_rfm_clustering.ipynb
+# open notebooks/01_eda.ipynb, 02_rfm_clustering.ipynb, 03_cohort_churn.ipynb
 ```
 
 ---
@@ -168,6 +185,61 @@ As a cross-check, K-Medoids clustering was run on the full dataset (including th
 
 ---
 
+## Week 3 — Cohort Retention Analysis & Churn Prediction
+
+**Goal:** Measure how well the business retains customers over time, and build a predictive model that flags customers likely to churn before they go silent.
+
+### Cohort retention analysis (`src/cohorts.py`)
+- Every customer assigned to an acquisition cohort based on the calendar month of their first purchase
+- A retention matrix built showing what % of each cohort was still purchasing in months 1, 2, 3 ... 12 after acquisition
+- **Average retention:** Month 1 = 21.2%, Month 3 = 21.6%, Month 6 = 17.8%, Month 12 = 18.2%
+
+The retention curve is notably **flat** rather than steeply declining — consistent with a B2B/wholesale customer base where repurchase cycles are long but regular, rather than impulse retail behaviour. The best-performing cohort (2009-12, 35.3% Month 1 retention) consists of customers acquired at the very start of the tracked period — likely already-established accounts. The worst-performing cohort (2010-12, 9.2%) reflects seasonal one-time gift purchasers, a typical December acquisition pattern with low follow-through.
+
+### Churn threshold — derived from data, not assumed
+
+Rather than using a standard 90-day retail default, the churn threshold was computed directly from the dataset's inter-purchase gap distribution:
+
+```
+threshold = median(inter-purchase gaps) + 1.5 × IQR(inter-purchase gaps)
+          = 106 days
+```
+
+This is the same statistical convention used in box-plot outlier detection (Tukey's fence), applied here to define "abnormally long silence" rather than an arbitrary fixed window. The flat retention curve directly motivated this choice — a fixed 90-day window would have misclassified many naturally long-cycle B2B customers as churned.
+
+### Feature engineering and target leakage
+
+Initial feature set included `Recency`, `R_Score`, and `recency_trend` alongside engineered behavioural features (`avg_days_between_orders`, `order_gap_std`, `product_diversity`). The first model trained on this set achieved a perfect ROC-AUC of 1.0000 — an immediate red flag for target leakage, since the churn label is itself derived from Recency (`Churned = 1 if Recency > 106 days`). All Recency-derived features were removed from the training set.
+
+**Final feature set:** `Frequency`, `Monetary`, `F_Score`, `M_Score`, `avg_days_between_orders`, `order_gap_std`, `product_diversity`, `CLV_capped` — eight behavioural features with no direct encoding of the target.
+
+### Model — XGBoost with SHAP explainability
+
+- Class balance checked empirically: 50.7% active / 49.3% churned — a near-even split that emerged naturally from the threshold derivation. SMOTE was evaluated but not applied, since the imbalance threshold (30%) was not crossed.
+- XGBoost classifier trained with conservative hyperparameters (`max_depth=4`, `n_estimators=200`, `learning_rate=0.05`) to reduce overfitting risk
+- **Test set performance:** ROC-AUC = 0.764, F1 = 0.723, Precision = 0.684, Recall = 0.766
+
+Recall was prioritised over Precision by design — a missed churner (false negative) costs more than an unnecessary win-back email (false positive). The model catches 76.6% of all customers who actually churn.
+
+### SHAP findings
+
+- **Frequency** is the strongest predictor: high-frequency buyers are substantially less likely to churn regardless of spend level
+- **Product diversity** is the third-strongest signal: customers engaging with a broad range of products are more invested in the retailer and harder to replace with a single competing supplier
+- **Monetary has a mixed directional signal** — high spend does not reliably predict retention on its own. High-spend customers include both loyal repeat accounts and one-time bulk buyers; the model correctly distinguishes between them using the other behavioural features
+- A SHAP waterfall analysis of the highest-risk customer (96.3% predicted churn probability) revealed a one-time large bulk-buyer profile: high CLV and Monetary, but low Frequency and narrow product diversity — exactly the pattern a domain expert would expect to flag
+
+### Cross-validation against Week 2 segments
+
+Churn rate was computed per `KMeans_Segment` to check whether the unsupervised segmentation and the supervised churn model tell a consistent story. They do: Loyal VIP and Champions show the lowest churn rates, while Lost/Inactive shows the highest — independent confirmation that both analyses are capturing the same underlying customer behaviour from different angles.
+
+### Outputs
+- `data/cohort_retention.csv`, `data/cohort_counts.csv`, `data/cohort_summary.csv`
+- `data/churn_labels.csv` — every customer with engineered features, churn label, and model prediction (with a `Split` column marking train vs. test)
+- `data/churn_model.joblib`, `data/churn_scaler.joblib`
+- SHAP summary and waterfall plots, ROC curve, confusion matrix, and churn-by-segment chart, all in `reports/`
+
+---
+
 ## Key Engineering Decisions
 
 **Why rank-based quintile scoring instead of plain `pd.qcut`:** real RFM data has heavy ties (many customers with Frequency=1), which causes `pd.qcut` to produce duplicate bucket edges and NaN scores. Ranking values first (breaking ties by order of appearance) guarantees unique, evenly-distributed buckets every time.
@@ -176,8 +248,12 @@ As a cross-check, K-Medoids clustering was run on the full dataset (including th
 
 **Why override the metric-optimal k:** optimising purely for silhouette score selected a mathematically clean but commercially uninformative 2-cluster split. Choosing k based on both statistical evidence (elbow inflection) and business interpretability (actionable segment count) reflects how segmentation decisions are made in practice.
 
-## Next Steps (Week 3)
+**Why the churn threshold was derived empirically rather than assumed:** a standard 90-day retail default would have misclassified many naturally long-cycle B2B customers as churned, given this dataset's flat retention curve. Deriving the threshold from the actual inter-purchase gap distribution (106 days) keeps the definition grounded in observed behaviour rather than a generic industry assumption.
 
-- Cohort retention analysis — track monthly retention by acquisition cohort
-- Churn prediction model — XGBoost classifier with SHAP explainability
-- Establish a data-driven churn threshold rather than an assumed default
+**Why Recency was excluded from the churn model despite being available:** an initial model trained with Recency-derived features achieved a perfect ROC-AUC of 1.0 — a clear sign of target leakage, since the churn label is itself defined by Recency. Removing it produced a more honest, generalisable model (ROC-AUC 0.764) that predicts churn from purchasing behaviour rather than directly reading the answer.
+
+## Next Steps (Week 4)
+
+- Streamlit dashboard with three tabs: segment explorer, cohort retention viewer, and a live churn risk predictor
+- Load the trained K-Means and XGBoost models via MLflow's Model Registry rather than directly from joblib files, to mirror a production serving pattern
+- Embed SHAP waterfall explanations directly in the dashboard so any customer's churn risk can be explained on demand
