@@ -555,118 +555,188 @@ behaviour rather than artefacts of either method individually.
 | 13 | Did not add `silence_ratio` feature despite testing it | Tested empirically; produced no change in ROC-AUC (tree model already discovers the ratio internally from existing features) | Tested, not adopted |
 | 14 | SMOTE implemented but not triggered | Churn classes emerged naturally balanced (50.7%/49.3%) from the threshold derivation; imbalance check is empirical, not assumed | Final |
 | 15 | Full-dataset prediction pass added after initial test-only predictions | Streamlit dashboard (Week 4) needs predictions for all customers, not just the 20% test split; `Split` column preserves ability to isolate test set for honest metrics | Final |
+| 16 | joblib over MLflow Model Registry for model serving | Registry adds value for multi-version, multi-team coordination; unnecessary ceremony for a solo project with one model per task. Direct joblib is simpler and more honest -- was the original planned approach in the Week 4 pre-build design, revised after assessment | Final |
+| 17 | `churn_df.copy()` in Tab 3 instead of merge | Diagnostic confirmed `KMeans_Segment` already present in churn_labels.csv; merge was unnecessary and introduced a silent type-mismatch NaN risk. Fallback merge with `astype(str)` casting retained in `get_all_data()` for resilience | Final |
+| 18 | Tab labels shortened to "Segments", "Retention", "Churn Risk" | Streamlit truncates overflowing tab labels; full names caused visible clipping on standard viewport widths | Final |
+| 19 | `use_container_width` removed from `st.plotly_chart` and `st.pyplot` | Deprecated by Streamlit (removal target end of 2025); charts default to responsive width without the argument | Final |
 
 ---
 
 ## 10. Open Questions / Risks
 
 ### Resolved during Week 3 (previously open)
-- ~~Churn threshold derivation~~ -- resolved, see 7.2 (106 days, data-derived)
-- ~~Outlier risk recurrence in churn features~~ -- did not resurface as a
-  blocking issue; gap-based features were capped at the 99th percentile as a
-  precaution, consistent with the Week 2 approach, but no separate VIP
-  exclusion was needed for the churn model specifically
-- ~~Class imbalance~~ -- resolved empirically; classes emerged balanced,
-  SMOTE implemented but not triggered (see 9, decision #14)
+- ~~Churn threshold derivation~~ -- resolved (106 days, data-derived)
+- ~~Outlier risk recurrence in churn features~~ -- did not resurface;
+  gap-based features capped at 99th percentile as precaution
+- ~~Class imbalance~~ -- classes emerged balanced, SMOTE not triggered
 
-### Open going into Week 4
-- **Model loading pattern:** current plan is `mlflow.pyfunc.load_model()`
-  from the Model Registry with stage="Production", but models are currently
-  only saved via `joblib.dump()`. Registering them formally in MLflow's Model
-  Registry (via `mlflow.sklearn.log_model()` / `mlflow.xgboost.log_model()`
-  with a registered model name) is a Week 4 prerequisite, not yet done.
-- **Single-purchase customer imputation:** `avg_days_between_orders` filled
-  with the churn threshold value for single-purchase customers is a known
-  limitation (see 7.6). Whether to fix this with an explicit
-  `is_single_purchase` flag before building the Streamlit predictor, or to
-  accept it as a documented limitation, is undecided.
-- **Feature redundancy:** `F_Score`, `M_Score` (near-zero SHAP contribution)
-  and `CLV_capped` (highly correlated with Frequency x Monetary) are
-  candidates for removal from the churn feature set in a cleanup pass. Not
-  done yet because `F_Score`/`M_Score` are still used by the rule-based
-  `Segment` column logic in `src/features.py` -- removing them from the churn
-  model only (not from `features.py`) is the likely path if pursued.
+### Resolved during Week 4 (previously open)
+- ~~Model loading pattern~~ -- joblib adopted over MLflow Model Registry
+  (see decision #16). `load_models()` explicitly names each key to prevent
+  cross-scaler contamination.
+- ~~Single-purchase customer imputation~~ -- retained as a documented
+  limitation. The `is_single_purchase` flag was considered but not
+  implemented; effect is visible in SHAP waterfall output.
+- ~~Feature redundancy (F_Score, M_Score, CLV_capped)~~ -- retained in
+  churn feature set. Removing them adds complexity without measurable
+  gain at this stage. Flagged for future v2 cleanup.
 
 ### Open going into Week 5
-- **Drift simulation strategy:** since the dataset is static (no live data
-  feed), drift detection will be demonstrated by splitting the historical
-  data temporally -- treating the 2009-2010 half as the "reference" window
-  and the 2010-2011 half as "current" -- rather than monitoring genuinely
-  live data. This is a deliberate simplification appropriate for portfolio
-  scope; it should be described as a simulated drift scenario, not
-  live production monitoring, in any documentation or interview discussion.
-- **Retraining trigger granularity:** undecided whether the retrain trigger
-  will re-run the full pipeline (ingest -> features -> train -> churn_model)
-  or only the affected stage. Re-running the full pipeline is simpler to
-  implement correctly; partial retraining is more realistic but adds
-  complexity disproportionate to the portfolio scope.
+- **Drift simulation strategy:** splitting 2009-2010 vs 2010-2011 as
+  reference/current windows. Must be explicitly described as simulated
+  in all documentation -- not presented as live production monitoring.
+- **Retraining trigger granularity:** whether to re-run the full pipeline
+  or only affected stages. Full pipeline rerun is simpler; partial
+  retraining more realistic but disproportionately complex for portfolio
+  scope.
+- **Monitoring tab integration:** fourth tab added to existing
+  `streamlit_app.py` -- no architectural restructuring needed, just an
+  additional `with tab4:` block and an Evidently HTML loader.
 
 ---
 
-## 11. Planned Design — Weeks 4-5
+## 11. Dashboard & Serving Detail (Week 4)
 
-*This section documents the intended architecture before implementation, to
-be revised with "as-built" detail (in the style of sections 5-7) once each
-week is actually completed.*
+*Converted from planned architecture to as-built detail.*
 
-### 11.1 Week 4 — Streamlit Dashboard & Model Serving
+### 11.1 App structure
 
-**Planned structure:** three tabs in a single `app/streamlit_app.py`.
+Two files in `app/`:
 
-- **Tab 1, Segment Explorer:** sidebar filter by `KMeans_Segment`; displays
-  RFM scatter plot and radar chart for the selected segment(s); customer table
-  with sortable columns. Reuses the plotting logic already built in
-  `notebooks/02_rfm_clustering.ipynb`, refactored into reusable functions
-  rather than duplicated.
-- **Tab 2, Retention Viewer:** interactive cohort heatmap with a date-range
-  selector; reuses `data/cohort_retention.csv` directly, no new computation.
-- **Tab 3, Churn Risk Predictor:** input sliders for the 8 non-leaking churn
-  features; on submission, loads the trained XGBoost model and displays the
-  predicted churn probability plus a live SHAP waterfall explanation for that
-  specific input -- directly extending the SHAP work from Week 3 into an
-  interactive tool rather than a static notebook plot.
+- `app/dashboard_data.py` — shared data-loading module imported by the
+  Streamlit app. All loading functions decorated with `@st.cache_data`
+  (DataFrames) or `@st.cache_resource` (model objects) so data is read
+  from disk only once per session regardless of how many times Streamlit
+  re-runs the script.
+- `app/streamlit_app.py` — three-tab dashboard. All data/model access
+  delegated to `dashboard_data.py`; the app file contains only UI logic.
+- `app/__init__.py` — empty file marking `app/` as a Python package,
+  required for `from app.dashboard_data import ...` to resolve correctly
+  when Streamlit runs from the project root.
 
-**Model loading approach (planned, not yet implemented):** register both the
-K-Means and XGBoost models in MLflow's Model Registry
-(`mlflow.sklearn.log_model(..., registered_model_name=...)` /
-`mlflow.xgboost.log_model(...)`), promote the chosen versions to the
-"Production" stage, and load them in the Streamlit app via
-`mlflow.pyfunc.load_model("models:/{name}/Production")`. This mirrors a real
-production serving pattern (swap models by changing the registry stage, not
-by editing application code) rather than hardcoding a joblib file path.
+### 11.2 Caching strategy
 
-**Risk to monitor:** the StandardScaler used for clustering (`scaler.joblib`)
-and the one used for churn (`churn_scaler.joblib`) are different objects
-fitted on different feature sets. The dashboard must apply the correct
-scaler to the correct model's inputs -- a likely source of bugs if not kept
-explicit in the app code.
+| Decorator | Used for | Why |
+|---|---|---|
+| `@st.cache_data` | DataFrames (rfm_segments, cohort_retention, churn_labels) | Returns a copy per call; safe for mutable objects |
+| `@st.cache_resource` | Model objects (KMeans, scalers, XGBoost) | Shares one instance; safe for read-only inference; never copies large numpy arrays |
 
-### 11.2 Week 5 — Monitoring, Drift Detection, Retraining
+Streamlit re-runs the entire script on every interaction. Without caching,
+3 CSV files and 4 model files would reload on every slider move (~3–5s per
+interaction). With caching: first load ~3–5s, every subsequent interaction
+near-instant.
+
+### 11.3 Tab 1 — Segment Explorer
+
+- `st.multiselect` filter drives scatter plot, radar chart, and customer
+  table simultaneously
+- Plotly scatter: Recency vs Frequency, coloured by `KMeans_Segment`,
+  capped at 97th percentile so bulk-buyer outliers don't compress the
+  main cluster
+- Radar chart: average R/F/M quintile scores (1–5) per selected segment,
+  using `go.Scatterpolar` with `fill="toself"`
+- Customer table: `st.dataframe` with `st.column_config` for typed columns
+  (currency formatting, integer display)
+
+### 11.4 Tab 2 — Retention Viewer
+
+- Plotly heatmap (`go.Heatmap`) of the cohort retention matrix with inline
+  annotations and hover tooltips
+- Cohort selector dropdown highlights one cohort's curve in coral against
+  all other cohorts rendered in light grey background — average curve in
+  blue as a reference line
+- Three `st.metric` cards below the chart update dynamically on cohort
+  selection (Month 1, 3, 6 retention with delta vs average)
+
+### 11.5 Tab 3 — Churn Risk Predictor
+
+**Two modes toggled by `st.radio`:**
+
+*Existing customer lookup:*
+- Segment pre-filter (`st.selectbox`) narrows the customer dropdown to a
+  manageable subset — essential for usability with 5,000+ customers
+- `Customer ID` cast to `str` before lookup to prevent type-mismatch
+  silent failures when CSV reads numeric IDs as int
+- Stored prediction from `churn_labels.csv` displayed alongside a live
+  re-prediction from the loaded model
+
+*Manual slider entry:*
+- Slider ranges derived at runtime from `get_feature_ranges()` —
+  min to 99th percentile of the actual data, so sliders represent
+  realistic values rather than arbitrary hardcoded bounds
+- Integer `st.slider` for count-based features (Frequency, F_Score,
+  M_Score, product_diversity); float slider for continuous features
+
+**Both modes share the same prediction + explanation block:**
+- Plotly `go.Indicator` gauge chart showing churn probability with
+  colour-coded risk zones and a threshold marker at 50%
+- SHAP waterfall placed behind `st.button` — computing SHAP takes ~1–2s;
+  running it reactively on every slider move would make the UI feel laggy.
+  `matplotlib.use("Agg")` required before any matplotlib call in
+  Streamlit to prevent the library from attempting to open a display
+  window, which crashes in a server/headless context.
+
+### 11.6 Design decisions made during implementation
+
+**Decision 16 — joblib over MLflow Model Registry:**
+See decision log entry #16. The registry was the original planned approach
+(documented in the pre-Week-4 version of this section) but was correctly
+assessed as unnecessary overhead for a solo project with one model version
+per task.
+
+**Decision 17 — `KMeans_Segment` availability:**
+Initial implementation assumed `churn_labels.csv` lacked `KMeans_Segment`
+and attempted a merge inside `get_all_data()`. The diagnostic confirmed
+the column is already present (written by `src/churn_model.py` during the
+full-dataset prediction pass). The merge guard was retained as a fallback
+with explicit `astype(str)` casting on both join keys, but the primary
+path is `churn_df.copy()` directly.
+
+**Decision 18 — Tab label length:**
+Streamlit truncates tab labels that overflow the viewport. Labels shortened
+to "Segments", "Retention", "Churn Risk" with a `white-space: nowrap` CSS
+rule added to the tab container to prevent future clipping at narrow widths.
+
+**Decision 19 — `use_container_width` deprecation:**
+Streamlit deprecated `use_container_width` on `st.plotly_chart` and
+`st.pyplot` in a recent version (removal target: end of 2025). Removed
+from all chart calls; retained only on `st.dataframe` where it is still
+valid. Charts default to responsive width without the argument.
+
+### 11.7 Planned design — Week 5
+
+*To be converted to as-built detail once Week 5 is completed.*
 
 **Planned structure:**
-- `src/monitor.py` -- uses Evidently AI's `ColumnDriftReport` /
-  `ClassificationPreset` to compare a reference window against a current
-  window of the data (see 10, drift simulation strategy)
-- `src/retrain.py` -- checks the latest drift report's summary metrics
-  against a defined threshold; if exceeded, re-runs the relevant pipeline
-  stage(s) and logs a new MLflow run tagged with the trigger reason
-- A fourth Streamlit tab, "Monitoring," displaying the latest HTML drift
-  report via `st.components.v1.html()`
+- `src/monitor.py` -- Evidently AI `ColumnDriftReport` and
+  `ClassificationPreset` comparing a reference window (2009-2010 half
+  of the dataset) against a current window (2010-2011 half) as a
+  simulated drift scenario
+- `src/retrain.py` -- checks drift report summary metrics against a
+  defined threshold; if exceeded, re-runs the relevant pipeline stage(s)
+  and logs a new MLflow run tagged with the trigger reason and timestamp
+- A fourth Streamlit tab "Monitoring" displaying the latest Evidently
+  HTML report via `st.components.v1.html()`, added to the existing
+  `app/streamlit_app.py` without restructuring the other three tabs
 
-**Explicitly out of scope for Week 5,** deferred to the post-Week-5 phase:
-Docker containerisation, cloud deployment (Streamlit Cloud / AWS / GCP),
-Prefect/Airflow scheduling of the retrain check, a FastAPI serving endpoint,
-and MCP integration (see decision #10 in section 9).
+**Drift simulation note:** since the dataset is static, drift will be
+demonstrated by splitting the historical data temporally rather than
+monitoring genuinely live data. This should be explicitly described as a
+simulated drift scenario in documentation and any interview discussion.
 
-### 11.3 Post-Week-5 (optional, deferred)
+**Explicitly out of scope for Week 5,** deferred to post-Week-5:
+Docker containerisation, cloud deployment, Prefect/Airflow scheduling,
+FastAPI serving endpoint, and MCP integration.
+
+### 11.8 Post-Week-5 (optional, deferred)
 
 | Extension | Trigger to revisit |
 |---|---|
 | Docker + docker-compose | Once Streamlit + MLflow are both stable locally |
-| Cloud deployment (Streamlit Cloud / Render) | After Docker, if a public demo link is wanted for the portfolio |
-| Prefect/Airflow scheduling | Only if moving beyond a static historical dataset to genuinely live data |
-| FastAPI serving endpoint | If programmatic (non-UI) access to predictions becomes a stated requirement |
-| MCP server for conversational queries | Only with a genuine use case (e.g. "ask Claude which segment has highest churn risk this month") -- not for resume-listing purposes alone |
+| Cloud deployment (Streamlit Cloud / Render) | After Docker, if a public demo link is wanted |
+| Prefect/Airflow scheduling | Only if moving beyond a static dataset to live data |
+| FastAPI serving endpoint | If programmatic access to predictions becomes a requirement |
+| MCP server for conversational queries | Only with a genuine use case -- not for resume-listing purposes alone |
 
 ---
 
@@ -675,13 +745,13 @@ and MCP integration (see decision #10 in section 9).
 - **End of Week 2:** Document created. Covered dataset selection, architecture
   through Week 2, full Week 1-2 design rationale and decision log.
 - **End of Week 3:** Added section 7 (Cohort Retention & Churn Prediction
-  Detail) covering cohort assignment, the empirically-derived 106-day churn
-  threshold, feature engineering, the target-leakage incident and its fix,
-  model training/evaluation results (ROC-AUC 0.7637), SHAP explainability
-  findings, the full-dataset prediction fix, and cross-validation against
-  Week 2 segments. Expanded section 8 (Experiment Tracking) to cover the
-  churn model's MLflow logging. Added decisions #11-15 to the decision log.
-  Resolved the three open risks carried over from Week 2. Added section 11
-  documenting planned (not yet built) architecture for Weeks 4-5, to be
-  converted to as-built detail as each week is completed. Renumbered all
-  subsequent sections accordingly.
+  Detail). Expanded section 8 (Experiment Tracking). Added decisions #11-15.
+  Resolved Week 2 open risks. Added section 11 (planned Weeks 4-5 architecture).
+- **End of Week 4:** Converted section 11.1 from planned to as-built (Dashboard
+  & Serving Detail). Added subsections 11.2–11.6 covering caching strategy,
+  tab-by-tab implementation detail, and four implementation decisions (#16-19).
+  Moved Week 5 planned architecture to section 11.7 and post-Week-5 extensions
+  to 11.8. Updated section 10 to mark Week 4 open questions as resolved and
+  refresh Week 5 risks. Added decisions #16-19 to decision log (joblib over
+  registry, KMeans_Segment availability, tab label length, use_container_width
+  deprecation). Tech stack table updated to reflect all completed tools.

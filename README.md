@@ -8,7 +8,7 @@ An end-to-end data science project analysing customer purchasing behaviour using
 ✓  Week 1 — Data pipeline, EDA, MLflow setup
 ✓  Week 2 — RFM scoring, K-Means clustering, segment profiling
 ✓  Week 3 — Cohort retention analysis, churn prediction model
-☐  Week 4 — Streamlit dashboard, model serving
+✓  Week 4 — Streamlit dashboard, model serving
 ☐  Week 5 — Monitoring, drift detection, retraining pipeline
 ```
 
@@ -24,11 +24,12 @@ This dataset was selected over alternatives (Olist Brazilian E-Commerce, Telco C
 |---|---|
 | Data processing | pandas, numpy |
 | Visualisation | matplotlib, seaborn, plotly |
-| Machine learning | scikit-learn, scikit-learn-extra |
+| Machine learning | scikit-learn, scikit-learn-extra, XGBoost, imbalanced-learn, SHAP |
 | Experiment tracking | MLflow (SQLite backend) |
 | Model persistence | joblib |
+| Dashboard | Streamlit (tabs, plotly charts, SHAP waterfall integration) |
 | Environment | Python 3.11, venv |
-| Planned (Week 3+) | XGBoost, imbalanced-learn, SHAP, Streamlit, Evidently AI |
+| Planned (Week 5) | Evidently AI (drift detection and HTML reports) |
 
 ## Project Structure
 
@@ -55,9 +56,13 @@ customer_segmentation/
 ├── src/
 │   ├── ingest.py              # data loading & cleaning pipeline
 │   ├── features.py            # RFM scoring & CLV computation
-│   ├── train.py                # K-Means clustering + MLflow tracking
-│   ├── cohorts.py              # cohort retention matrix
-│   └── churn_model.py          # churn feature engineering + XGBoost + SHAP
+│   ├── train.py               # K-Means clustering + MLflow tracking
+│   ├── cohorts.py             # cohort retention matrix
+│   └── churn_model.py         # churn feature engineering + XGBoost + SHAP
+├── app/
+│   ├── __init__.py            # makes app/ a Python package
+│   ├── dashboard_data.py      # cached data/model loading module
+│   └── streamlit_app.py       # main Streamlit dashboard (3 tabs)
 ├── reports/                   # saved plots and charts
 ├── requirements.txt
 ├── .gitignore
@@ -100,6 +105,10 @@ python src/cohorts.py
 
 # Week 3 — churn prediction model (XGBoost + SHAP)
 python src/churn_model.py
+
+# Week 4 — launch Streamlit dashboard
+streamlit run app/streamlit_app.py
+# then open http://localhost:8501
 
 # View experiment tracking
 mlflow ui --backend-store-uri sqlite:///mlflow.db
@@ -240,6 +249,50 @@ Churn rate was computed per `KMeans_Segment` to check whether the unsupervised s
 
 ---
 
+## Week 4 — Streamlit Dashboard & Model Serving
+
+**Goal:** Surface all analysis from Weeks 1–3 in an interactive dashboard — making the segmentation, retention data, and churn model accessible without running a single script or opening a notebook.
+
+### App structure (`app/`)
+
+Two files — a data-loading module and the main app — kept deliberately separate so each does one thing:
+
+- `app/dashboard_data.py` — loads all CSVs and model files using Streamlit's caching system (`@st.cache_data` for DataFrames, `@st.cache_resource` for model objects). All four data files and four model/scaler files are loaded once per session; every subsequent slider move or button click uses the in-memory cache rather than re-reading from disk.
+- `app/streamlit_app.py` — the three-tab dashboard. Imports everything from `dashboard_data.py`.
+
+### Tab 1 — Segment Explorer
+
+A `st.multiselect` widget drives all three components simultaneously — a Plotly scatter plot (Recency vs Frequency, coloured by segment), a radar chart showing average R/F/M quintile scores per segment, and a sortable customer detail table with currency-formatted columns. Scatter values are capped at the 97th percentile to prevent the bulk-buyer outliers from compressing the main cluster into a tiny corner of the chart.
+
+### Tab 2 — Retention Viewer
+
+An interactive Plotly heatmap of the cohort retention matrix with hover tooltips showing exact percentages. A cohort selector dropdown highlights one cohort's retention curve against the grey-background average — best and worst cohort curves are immediately comparable. Three metric cards below the chart update dynamically when the selected cohort changes.
+
+### Tab 3 — Churn Risk Predictor
+
+Two modes toggled by `st.radio`:
+- **Existing customer lookup** — a segment pre-filter narrows the dropdown to a manageable subset before the Customer ID selector, making it usable with 5,000+ customers. Displays the stored prediction from `churn_labels.csv` alongside a live re-prediction from the model.
+- **Manual slider entry** — eight sliders (one per churn feature) with ranges derived from the actual data distribution (min to 99th percentile). Integer sliders for count-based features (Frequency, scores, product diversity), float sliders for continuous features.
+
+Both modes feed into the same live prediction block: a Plotly gauge chart showing the churn probability with a colour-coded risk label (Very Low / Low / Medium / High Risk), a feature summary table, and an on-demand SHAP waterfall explanation. SHAP computation is placed behind a button rather than running on every slider move — each computation takes ~1–2 seconds and running it reactively would make the sliders feel laggy.
+
+### Key design decisions made during Week 4
+
+**joblib over MLflow Model Registry:** the Model Registry adds value when multiple model versions compete for a "Production" slot across a team. For a solo project with one chosen model per task, the registry adds ceremony without solving a real problem. Direct joblib loading is simpler, faster, and more honest — an interviewer who's used MLflow in production will immediately challenge unnecessary registry usage.
+
+**Dual-scaler safety:** two separate StandardScaler objects exist — `scaler.joblib` fitted on RFM features (for K-Means) and `churn_scaler.joblib` fitted on the 8 churn features (for XGBoost). A type mismatch between them produces silently wrong predictions with no error raised. The `load_models()` function in `dashboard_data.py` names them explicitly (`models["rfm_scaler"]` vs `models["churn_scaler"]`) and `predict_churn_single()` uses `models["churn_scaler"]` by name — making misuse visible rather than hidden.
+
+**`KMeans_Segment` availability:** the column is already present in `churn_labels.csv` (written by `src/churn_model.py` during the full-dataset prediction pass). `get_all_data()` includes a fallback merge with explicit `astype(str)` casting on both join keys in case the column is ever missing — preventing the silent all-NaN join that caused a `KeyError` during initial development.
+
+**Tab label length:** Streamlit truncates tab labels that overflow the available width. Labels shortened to "Segments", "Retention", "Churn Risk" with a `white-space: nowrap` CSS rule to prevent future clipping.
+
+### Outputs
+- `app/__init__.py` — marks `app/` as a Python package for clean imports
+- `app/dashboard_data.py` — cached loading module with helper functions
+- `app/streamlit_app.py` — full three-tab dashboard
+
+---
+
 ## Key Engineering Decisions
 
 **Why rank-based quintile scoring instead of plain `pd.qcut`:** real RFM data has heavy ties (many customers with Frequency=1), which causes `pd.qcut` to produce duplicate bucket edges and NaN scores. Ranking values first (breaking ties by order of appearance) guarantees unique, evenly-distributed buckets every time.
@@ -252,8 +305,10 @@ Churn rate was computed per `KMeans_Segment` to check whether the unsupervised s
 
 **Why Recency was excluded from the churn model despite being available:** an initial model trained with Recency-derived features achieved a perfect ROC-AUC of 1.0 — a clear sign of target leakage, since the churn label is itself defined by Recency. Removing it produced a more honest, generalisable model (ROC-AUC 0.764) that predicts churn from purchasing behaviour rather than directly reading the answer.
 
-## Next Steps (Week 4)
+**Why joblib over MLflow Model Registry for serving:** the registry is valuable when multiple model versions compete for a production slot across a team. For a solo project with one chosen model per task, it adds setup ceremony without solving a real problem — and an interviewer who uses MLflow in production would immediately ask why it was needed. Direct joblib loading is simpler, transparent, and honest.
 
-- Streamlit dashboard with three tabs: segment explorer, cohort retention viewer, and a live churn risk predictor
-- Load the trained K-Means and XGBoost models via MLflow's Model Registry rather than directly from joblib files, to mirror a production serving pattern
-- Embed SHAP waterfall explanations directly in the dashboard so any customer's churn risk can be explained on demand
+## Next Steps (Week 5)
+
+- `src/monitor.py` — Evidently AI drift reports comparing 2009–2010 (reference) vs 2010–2011 (current) data as a simulated drift scenario
+- `src/retrain.py` — automated retraining trigger when drift exceeds threshold, logging a new MLflow run
+- Add a "Monitoring" tab to the Streamlit dashboard displaying the latest Evidently HTML report via `st.components.v1.html()`
