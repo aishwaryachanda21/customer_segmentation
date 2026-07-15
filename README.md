@@ -278,7 +278,7 @@ Both modes feed into the same live prediction block: a Plotly gauge chart showin
 
 ### Key design decisions made during Week 4
 
-**joblib over MLflow Model Registry:** the Model Registry adds value when multiple model versions compete for a "Production" slot across a team. For a solo project with one chosen model per task, the registry adds ceremony without solving a real problem. Direct joblib loading is simpler, faster, and more honest — an interviewer who's used MLflow in production will immediately challenge unnecessary registry usage.
+**joblib over MLflow Model Registry:** the Model Registry adds value when multiple model versions compete for a "Production" slot across a team. For a solo project with one chosen model per task, the registry adds ceremony without solving a real problem. Direct joblib loading is simpler, faster and registry usage will be unnecessary.
 
 **Dual-scaler safety:** two separate StandardScaler objects exist — `scaler.joblib` fitted on RFM features (for K-Means) and `churn_scaler.joblib` fitted on the 8 churn features (for XGBoost). A type mismatch between them produces silently wrong predictions with no error raised. The `load_models()` function in `dashboard_data.py` names them explicitly (`models["rfm_scaler"]` vs `models["churn_scaler"]`) and `predict_churn_single()` uses `models["churn_scaler"]` by name — making misuse visible rather than hidden.
 
@@ -305,7 +305,7 @@ Both modes feed into the same live prediction block: a Plotly gauge chart showin
 
 **Why Recency was excluded from the churn model despite being available:** an initial model trained with Recency-derived features achieved a perfect ROC-AUC of 1.0 — a clear sign of target leakage, since the churn label is itself defined by Recency. Removing it produced a more honest, generalisable model (ROC-AUC 0.764) that predicts churn from purchasing behaviour rather than directly reading the answer.
 
-**Why joblib over MLflow Model Registry for serving:** the registry is valuable when multiple model versions compete for a production slot across a team. For a solo project with one chosen model per task, it adds setup ceremony without solving a real problem — and an interviewer who uses MLflow in production would immediately ask why it was needed. Direct joblib loading is simpler, transparent, and honest.
+**Why joblib over MLflow Model Registry for serving:** the registry is valuable when multiple model versions compete for a production slot across a team. For a solo project with one chosen model per task, it adds setup ceremony without solving a real problem. Direct joblib loading is simpler, transparent, and honest.
 
 ## Next Steps (Week 5)
 
