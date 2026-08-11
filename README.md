@@ -1,15 +1,15 @@
 # Customer Segmentation & Retention Analysis
 
-An end-to-end data science project analysing customer purchasing behaviour using RFM analysis and K-Means clustering, built on real UK e-commerce transaction data. This project demonstrates the complete lifecycle from raw data to a deployed, monitored model — covering data engineering, unsupervised learning, experiment tracking, and (in later phases) churn prediction, dashboarding, and MLOps.
+This is an end-to-end data science project analysing customer purchasing behaviour using RFM analysis and K-Means clustering, built on real UK e-commerce transaction data. This project demonstrates the complete lifecycle from raw data to a deployed, monitored model including data engineering, unsupervised learning, experiment tracking, churn prediction, dashboarding, and MLflow.
 
 ## Project Status
 
 ```
-✓  Week 1 — Data pipeline, EDA, MLflow setup
-✓  Week 2 — RFM scoring, K-Means clustering, segment profiling
-✓  Week 3 — Cohort retention analysis, churn prediction model
-✓  Week 4 — Streamlit dashboard, model serving
-☐  Week 5 — Monitoring, drift detection, retraining pipeline
+✓  Phase 1 — Data pipeline, EDA, MLflow setup
+✓  Phase 2 — RFM scoring, K-Means clustering, segment profiling
+✓  Phase 3 — Cohort retention analysis, churn prediction model
+✓  Phase 4 — Streamlit dashboard, model serving
+☐  Phase 5 — Monitoring, drift detection, retraining pipeline
 ```
 
 ## Dataset
@@ -29,25 +29,25 @@ This dataset was selected over alternatives (Olist Brazilian E-Commerce, Telco C
 | Model persistence | joblib |
 | Dashboard | Streamlit (tabs, plotly charts, SHAP waterfall integration) |
 | Environment | Python 3.11, venv |
-| Planned (Week 5) | Evidently AI (drift detection and HTML reports) |
+| Planned (Phase 5) | Evidently AI (drift detection and HTML reports) |
 
 ## Project Structure
 
 ```
 customer_segmentation/
 ├── data/                     # raw + processed data (gitignored)
-│   ├── clean_retail.csv      # cleaned transaction data (Week 1)
-│   ├── rfm_scores.csv        # RFM scores per customer (Week 2)
-│   ├── rfm_segments.csv      # customers + cluster labels (Week 2)
+│   ├── clean_retail.csv      # cleaned transaction data (Phase 1)
+│   ├── rfm_scores.csv        # RFM scores per customer (Phase 2)
+│   ├── rfm_segments.csv      # customers + cluster labels (Phase 2)
 │   ├── rfm_full.csv          # full dataset incl. outliers, scaled-ready
 │   ├── vip_outliers.csv      # bulk B2B accounts separated pre-clustering
 │   ├── scaler.joblib         # fitted StandardScaler (RFM)
 │   ├── kmeans_model.joblib   # final K-Means model
-│   ├── cohort_retention.csv  # monthly retention % matrix (Week 3)
-│   ├── cohort_counts.csv     # raw cohort counts matrix (Week 3)
-│   ├── cohort_summary.csv    # key retention metrics (Week 3)
-│   ├── churn_labels.csv      # all customers + churn label + predictions (Week 3)
-│   ├── churn_model.joblib    # trained XGBoost churn model (Week 3)
+│   ├── cohort_retention.csv  # monthly retention % matrix (Phase 3)
+│   ├── cohort_counts.csv     # raw cohort counts matrix (Phase 3)
+│   ├── cohort_summary.csv    # key retention metrics (Phase 3)
+│   ├── churn_labels.csv      # all customers + churn label + predictions (Phase 3)
+│   ├── churn_model.joblib    # trained XGBoost churn model (Phase 3)
 │   └── churn_scaler.joblib   # fitted StandardScaler (churn features)
 ├── notebooks/
 │   ├── 01_eda.ipynb              # exploratory data analysis
@@ -91,22 +91,22 @@ Download the dataset from [UCI](https://archive.ics.uci.edu/dataset/502/online+r
 ## How to Run
 
 ```bash
-# Week 1 — clean the raw data
+# Phase 1 — clean the raw data
 python src/ingest.py
 
-# Week 2 — compute RFM scores and CLV
+# Phase 2 — compute RFM scores and CLV
 python src/features.py
 
-# Week 2 — run K-Means clustering with MLflow tracking
+# Phase 2 — run K-Means clustering with MLflow tracking
 python src/train.py
 
-# Week 3 — cohort retention analysis
+# Phase 3 — cohort retention analysis
 python src/cohorts.py
 
-# Week 3 — churn prediction model (XGBoost + SHAP)
+# Phase 3 — churn prediction model (XGBoost + SHAP)
 python src/churn_model.py
 
-# Week 4 — launch Streamlit dashboard
+# Phase 4 — launch Streamlit dashboard
 streamlit run app/streamlit_app.py
 # then open http://localhost:8501
 
@@ -121,7 +121,7 @@ jupyter lab
 
 ---
 
-## Week 1 — Data Pipeline & Exploratory Analysis
+## Phase 1 — Data Pipeline & Exploratory Analysis
 
 **Goal:** Load, clean, and understand the raw transaction data before any modelling.
 
@@ -145,7 +145,7 @@ Switched from the deprecated file-based tracking backend to a SQLite backend (`s
 
 ---
 
-## Week 2 — RFM Scoring & Customer Segmentation
+## Phase 2 — RFM Scoring & Customer Segmentation
 
 **Goal:** Score every customer on Recency, Frequency, and Monetary value, then use unsupervised clustering to discover natural customer segments.
 
@@ -173,7 +173,7 @@ A small number of customers (~39, representing roughly the top 1% by spend and f
 - **`Segment`** — rule-based, computed from each customer's individual 1–5 RFM quintile scores against fixed thresholds (e.g. R≥4 and F≥4 and M≥4 → Champions)
 - **`KMeans_Segment`** — model-based, derived from K-Means clustering on continuous scaled RFM values, with each cluster named from its average centre
 
-These two methods agree for the majority of customers, which supports the robustness of the segmentation. Where they disagree, it is typically for customers near a quintile boundary or near a cluster edge — these are genuinely ambiguous cases rather than errors in either method. A crosstab comparing the two (`reports/plot_15_segment_crosstab.png`) is included in the analysis notebook. **`KMeans_Segment` is treated as the primary segment** for downstream use (the Streamlit dashboard in Week 4), since it reflects overall behavioural similarity rather than independently-thresholded scores.
+These two methods agree for the majority of customers, which supports the robustness of the segmentation. Where they disagree, it is typically for customers near a quintile boundary or near a cluster edge — these are genuinely ambiguous cases rather than errors in either method. A crosstab comparing the two (`reports/plot_15_segment_crosstab.png`) is included in the analysis notebook. **`KMeans_Segment` is treated as the primary segment** for downstream use (the Streamlit dashboard in Phase 4), since it reflects overall behavioural similarity rather than independently-thresholded scores.
 
 ### Final segments
 
@@ -189,12 +189,12 @@ As a cross-check, K-Medoids clustering was run on the full dataset (including th
 
 ### Outputs
 - `data/rfm_segments.csv` — every customer with RFM values, scores, cluster assignment, segment name, and CLV
-- `data/scaler.joblib`, `data/kmeans_model.joblib` — persisted for reuse in the Streamlit dashboard (Week 4)
+- `data/scaler.joblib`, `data/kmeans_model.joblib` — persisted for reuse in the Streamlit dashboard (Phase 4)
 - 7 experiment runs (k=2–8) plus one labelled final model run, all tracked in MLflow with logged parameters, metrics, and artifacts (evaluation charts, model files)
 
 ---
 
-## Week 3 — Cohort Retention Analysis & Churn Prediction
+## Phase 3 — Cohort Retention Analysis & Churn Prediction
 
 **Goal:** Measure how well the business retains customers over time, and build a predictive model that flags customers likely to churn before they go silent.
 
@@ -237,7 +237,7 @@ Recall was prioritised over Precision by design — a missed churner (false nega
 - **Monetary has a mixed directional signal** — high spend does not reliably predict retention on its own. High-spend customers include both loyal repeat accounts and one-time bulk buyers; the model correctly distinguishes between them using the other behavioural features
 - A SHAP waterfall analysis of the highest-risk customer (96.3% predicted churn probability) revealed a one-time large bulk-buyer profile: high CLV and Monetary, but low Frequency and narrow product diversity — exactly the pattern a domain expert would expect to flag
 
-### Cross-validation against Week 2 segments
+### Cross-validation against Phase 2 segments
 
 Churn rate was computed per `KMeans_Segment` to check whether the unsupervised segmentation and the supervised churn model tell a consistent story. They do: Loyal VIP and Champions show the lowest churn rates, while Lost/Inactive shows the highest — independent confirmation that both analyses are capturing the same underlying customer behaviour from different angles.
 
@@ -249,9 +249,9 @@ Churn rate was computed per `KMeans_Segment` to check whether the unsupervised s
 
 ---
 
-## Week 4 — Streamlit Dashboard & Model Serving
+## Phase 4 — Streamlit Dashboard & Model Serving
 
-**Goal:** Surface all analysis from Weeks 1–3 in an interactive dashboard — making the segmentation, retention data, and churn model accessible without running a single script or opening a notebook.
+**Goal:** Surface all analysis from Phases 1–3 in an interactive dashboard — making the segmentation, retention data, and churn model accessible without running a single script or opening a notebook.
 
 ### App structure (`app/`)
 
@@ -276,7 +276,7 @@ Two modes toggled by `st.radio`:
 
 Both modes feed into the same live prediction block: a Plotly gauge chart showing the churn probability with a colour-coded risk label (Very Low / Low / Medium / High Risk), a feature summary table, and an on-demand SHAP waterfall explanation. SHAP computation is placed behind a button rather than running on every slider move — each computation takes ~1–2 seconds and running it reactively would make the sliders feel laggy.
 
-### Key design decisions made during Week 4
+### Key design decisions made during Phase 4
 
 **joblib over MLflow Model Registry:** the Model Registry adds value when multiple model versions compete for a "Production" slot across a team. For a solo project with one chosen model per task, the registry adds ceremony without solving a real problem. Direct joblib loading is simpler, faster and registry usage will be unnecessary.
 
@@ -307,7 +307,7 @@ Both modes feed into the same live prediction block: a Plotly gauge chart showin
 
 **Why joblib over MLflow Model Registry for serving:** the registry is valuable when multiple model versions compete for a production slot across a team. For a solo project with one chosen model per task, it adds setup ceremony without solving a real problem. Direct joblib loading is simpler, transparent, and honest.
 
-## Next Steps (Week 5)
+## Next Steps (Phase 5)
 
 - `src/monitor.py` — Evidently AI drift reports comparing 2009–2010 (reference) vs 2010–2011 (current) data as a simulated drift scenario
 - `src/retrain.py` — automated retraining trigger when drift exceeds threshold, logging a new MLflow run
